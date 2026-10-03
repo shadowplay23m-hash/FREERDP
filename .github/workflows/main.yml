@@ -1,3 +1,61 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Configure Core RDP Settings
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $rdpPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
+          $tcpPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+
+          Set-ItemProperty -Path $rdpPath -Name 'fDenyTSConnections' -Value 0 -Force
+          Set-ItemProperty -Path $tcpPath -Name 'UserAuthentication' -Value 1 -Force
+
+          Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
+
+          Write-Host 'RDP configured with NLA enabled.'
+
+      - name: Create RDP User with Secure Password
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $username = 'RDP'
+
+          $existingUser = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+
+          if ($existingUser) {
+              throw 'RDP user already exists. Use a clean runner.'
+          }
+
+          $bytes = New-Object byte[] 24
+          $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+          $rng.GetBytes($bytes)
+          $rng.Dispose()
+
+          $password = [Convert]::ToBase64String($bytes)
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
+
+          Add-LocalGroupMember -Group 'Remote Desktop Users' -Member $username
+
+          "RDP_USERNAME=$username" >> $env:GITHUB_ENV
+
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($password))
+          "RDP_PASSWORD_B64=$encoded" >> $env:GITHUB_ENV
+
+          Write-Host 'RDP user created successfully.'
+
       - name: Install Tailscale
         shell: pwsh
         run: |
@@ -5,26 +63,101 @@
 
           $tsUrl = 'https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi'
           $installerPath = "$env:TEMP\tailscale.msi"
-
-          Write-Host "Downloading Tailscale..."
+          $logPath = "$env:TEMP\tailscale-install.log"
 
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
 
-          if (!(Test-Path $installerPath)) {
-              throw "Download failed."
-          }
-
-          Write-Host "Installing Tailscale..."
-
           $process = Start-Process msiexec.exe `
-              -ArgumentList "/i `"$installerPath`" /qn /norestart /L*v `"$env:TEMP\tailscale-install.log`"" `
-              -Wait -PassThru
-
-          Write-Host "MSI Exit Code: $($process.ExitCode)"
+            -ArgumentList "/i `"$installerPath`" /qn /norestart /L*v `"$logPath`"" `
+            -Wait -PassThru
 
           if ($process.ExitCode -notin @(0, 3010, 1641)) {
-              Get-Content "$env:TEMP\tailscale-install.log" -Tail 40
-              throw "Tailscale installation failed."
+              Get-Content $logPath -Tail 40
+              throw "Tailscale installation failed: $($process.ExitCode)"
           }
 
-          Write-Host "Tailscale installation completed."
+          Write-Host 'Tailscale installation completed.'
+
+      - name: Establish Tailscale Connection
+        shell: pwsh
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
+              throw 'TAILSCALE_AUTH_KEY secret is missing.'
+          }
+
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          $retries = 0
+          while (!(Test-Path $ts) -and $retries -lt 12) {
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+
+          if (!(Test-Path $ts)) {
+              throw 'Tailscale executable not found.'
+          }
+
+          Start-Service -Name Tailscale -ErrorAction SilentlyContinue
+
+          & $ts up "--authkey=$env:TS_AUTHKEY" "--hostname=gh-runner-$env:GITHUB_RUN_ID"
+
+          if ($LASTEXITCODE -ne 0) {
+              throw 'Tailscale connection failed.'
+          }
+
+          Start-Sleep -Seconds 5
+
+          $tsIP = & $ts ip -4
+
+          if ([string]::IsNullOrWhiteSpace($tsIP)) {
+              throw 'Tailscale IP not assigned.'
+          }
+
+          "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+          Write-Host "Tailscale IP: $tsIP"
+
+      - name: Verify RDP Accessibility
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+
+          $testResult = Test-NetConnection `
+            -ComputerName '127.0.0.1' `
+            -Port 3389 `
+            -WarningAction SilentlyContinue
+
+          if (-not $testResult.TcpTestSucceeded) {
+              throw 'RDP port 3389 is not accessible.'
+          }
+
+          Write-Host 'RDP TCP connectivity successful.'
+
+      - name: Display RDP Credentials
+        shell: pwsh
+        run: |
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: $env:RDP_USERNAME"
+
+          $password = [Text.Encoding]::UTF8.GetString(
+              [Convert]::FromBase64String($env:RDP_PASSWORD_B64)
+          )
+
+          Write-Host "Password: $password"
+
+      - name: Maintain Connection
+        shell: pwsh
+        run: |
+          Write-Host 'Runner is active.'
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+
+          while ($true) {
+              Write-Host "[$(Get-Date)] Runner Active"
+              Start-Sleep -Seconds 300
+          }
