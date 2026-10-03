@@ -1,0 +1,30 @@
+      - name: Install Tailscale
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $tsUrl = 'https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi'
+          $installerPath = "$env:TEMP\tailscale.msi"
+
+          Write-Host "Downloading Tailscale..."
+
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+
+          if (!(Test-Path $installerPath)) {
+              throw "Download failed."
+          }
+
+          Write-Host "Installing Tailscale..."
+
+          $process = Start-Process msiexec.exe `
+              -ArgumentList "/i `"$installerPath`" /qn /norestart /L*v `"$env:TEMP\tailscale-install.log`"" `
+              -Wait -PassThru
+
+          Write-Host "MSI Exit Code: $($process.ExitCode)"
+
+          if ($process.ExitCode -notin @(0, 3010, 1641)) {
+              Get-Content "$env:TEMP\tailscale-install.log" -Tail 40
+              throw "Tailscale installation failed."
+          }
+
+          Write-Host "Tailscale installation completed."
