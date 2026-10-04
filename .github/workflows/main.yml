@@ -13,7 +13,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $installer = "$env:TEMP\tailscale.exe"
+          $installer = "$env:TEMP\tailscale-setup.exe"
 
           Invoke-WebRequest `
             -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" `
@@ -29,23 +29,37 @@ jobs:
         env:
           TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
         run: |
-          $ErrorActionPreference = "Stop"
-
           $ts = "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe"
 
           if (-not (Test-Path $ts)) {
             $ts = "${env:ProgramFiles}\Tailscale\tailscale.exe"
-          }
-
-          if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
-            throw "TS_AUTHKEY GitHub Secret is missing."
           }
 
           & $ts up `
             --auth-key="$env:TS_AUTHKEY" `
             --hostname="github-windows"
 
-      - name: Get Tailscale IP
+      - name: Generate username and password
+        shell: powershell
+        run: |
+          $username = "rdp_" + (-join (
+            1..6 | ForEach-Object {
+              [char](Get-Random -Minimum 97 -Maximum 123)
+            }
+          ))
+
+          $chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+
+          $password = -join (
+            1..6 | ForEach-Object {
+              $chars[(Get-Random -Minimum 0 -Maximum $chars.Length)]
+            }
+          )
+
+          Write-Host "USERNAME=$username"
+          Write-Host "PASSWORD=$password"
+
+      - name: Show Tailscale IP
         shell: powershell
         run: |
           $ts = "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe"
@@ -54,20 +68,8 @@ jobs:
             $ts = "${env:ProgramFiles}\Tailscale\tailscale.exe"
           }
 
-          Write-Host "Tailscale IPv4:"
+          Write-Host "Tailscale IP:"
           & $ts ip -4
 
           Write-Host ""
-          Write-Host "Tailscale status:"
           & $ts status
-
-      - name: Test connectivity
-        shell: powershell
-        run: |
-          $ts = "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe"
-
-          if (-not (Test-Path $ts)) {
-            $ts = "${env:ProgramFiles}\Tailscale\tailscale.exe"
-          }
-
-          & $ts netcheck
