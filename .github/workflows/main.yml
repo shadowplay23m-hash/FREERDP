@@ -39,25 +39,25 @@ jobs:
             --auth-key="$env:TS_AUTHKEY" `
             --hostname="github-windows"
 
-      - name: Generate username and password
+      - name: Generate Username and Password
         shell: powershell
         run: |
-          $username = "rdp_" + (-join (
-            1..6 | ForEach-Object {
-              [char](Get-Random -Minimum 97 -Maximum 123)
-            }
-          ))
+          $letters = "abcdefghijklmnopqrstuvwxyz"
+          $username = "rdp_" + (-join (1..6 | ForEach-Object {
+            $letters[(Get-Random -Maximum $letters.Length)]
+          }))
 
           $chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+          $password = -join (1..6 | ForEach-Object {
+            $chars[(Get-Random -Maximum $chars.Length)]
+          })
 
-          $password = -join (
-            1..6 | ForEach-Object {
-              $chars[(Get-Random -Minimum 0 -Maximum $chars.Length)]
-            }
-          )
-
-          Write-Host "USERNAME=$username"
-          Write-Host "PASSWORD=$password"
+          Write-Host ""
+          Write-Host "=============================="
+          Write-Host "USERNAME: $username"
+          Write-Host "PASSWORD: $password"
+          Write-Host "=============================="
+          Write-Host ""
 
       - name: Show Tailscale IP
         shell: powershell
@@ -72,4 +72,5 @@ jobs:
           & $ts ip -4
 
           Write-Host ""
+          Write-Host "Tailscale status:"
           & $ts status
